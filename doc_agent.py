@@ -4,14 +4,23 @@ Uses Google Gemini API for AI-powered documentation generation
 """
 
 import os
+import sys
 import time
 import hashlib
 from datetime import datetime
-from github import Github
-import google.generativeai as genai
+from github import Github, Auth
+from google import genai
+from google.genai import types
 import json
 from pathlib import Path
 from dotenv import load_dotenv
+
+# Fix Windows console encoding for emoji support
+if sys.platform == 'win32':
+    try:
+        sys.stdout.reconfigure(encoding='utf-8')
+    except:
+        pass
 
 # Load environment variables
 load_dotenv()
@@ -27,12 +36,13 @@ class DocumentationAgent:
             github_token: GitHub personal access token
             gemini_api_key: Google Gemini API key
         """
-        self.github = Github(github_token)
+        # Initialize GitHub with new auth method
+        auth = Auth.Token(github_token)
+        self.github = Github(auth=auth)
         self.repo = self.github.get_repo(repo_name)
         
-        # Configure Gemini
-        genai.configure(api_key=gemini_api_key)
-        self.model = genai.GenerativeModel('gemini-1.5-pro')
+        # Configure Gemini with new client
+        self.client = genai.Client(api_key=gemini_api_key)
         
         self.cache_file = "repo_cache.json"
         self.last_commit_sha = None
@@ -104,62 +114,201 @@ class DocumentationAgent:
         return changes
     
     def generate_documentation(self, repo_structure, current_readme, changes=None):
-        """Use Gemini to generate or update documentation"""
+        """Use Gemini to generate or update documentation without code blocks"""
         
         # Prepare the codebase summary
         code_summary = self._prepare_code_summary(repo_structure)
         
-        # Create prompt for Gemini
+        # The core instruction to avoid the "boxes"
+        formatting_instructions = """
+1. Use markdown ONLY for headings (# ## ###) and lists (-)
+2. DO NOT use code blocks (```) UNLESS showing actual executable code
+3. DO NOT use backticks (`) for regular text, file names, or descriptions
+4. Write everything as plain readable text in paragraphs
+5. Code blocks are ONLY for: commands to run, code examples, configuration files
+6. NO code blocks for: explanations, descriptions, architecture flow, file names
+"""
+
         if changes and (changes["added"] or changes["modified"] or changes["deleted"]):
-            prompt = f"""You are a technical documentation expert. Analyze the following code repository and update the README documentation.
+            prompt = f"""You are a technical documentation expert. Update the README.
 
 CURRENT README:
 {current_readme}
 
-REPOSITORY STRUCTURE AND CODE:
+REPOSITORY CODE:
 {code_summary}
 
-RECENT CHANGES:
-- Added files: {', '.join(changes['added']) if changes['added'] else 'None'}
-- Modified files: {', '.join(changes['modified']) if changes['modified'] else 'None'}
-- Deleted files: {', '.join(changes['deleted']) if changes['deleted'] else 'None'}
+CHANGES:
+- Added: {', '.join(changes['added']) if changes['added'] else 'None'}
+- Modified: {', '.join(changes['modified']) if changes['modified'] else 'None'}
+- Deleted: {', '.join(changes['deleted']) if changes['deleted'] else 'None'}
 
 TASK:
-1. Review the changes and determine if README updates are necessary
-2. If updates are needed, provide an updated README that:
-   - Clearly explains what the project does
-   - Documents the main components and their purposes
-   - Includes installation instructions
-   - Provides usage examples
-   - Lists dependencies
-   - Maintains consistent formatting
+Review the changes. If updates are needed, provide an updated README. If not, respond with "NO_UPDATE_NEEDED".
 
-3. If no significant updates are needed, respond with: "NO_UPDATE_NEEDED"
+{formatting_instructions}
 
-Provide ONLY the updated README content in markdown format, or "NO_UPDATE_NEEDED"."""
+Provide ONLY the markdown content, or "NO_UPDATE_NEEDED"."""
         else:
-            prompt = f"""You are a technical documentation expert. Create comprehensive README documentation for this code repository.
+            prompt = f"""You are a technical documentation expert. Create a README for this repository.
 
-REPOSITORY STRUCTURE AND CODE:
+REPOSITORY CODE:
 {code_summary}
 
-Create a professional README.md that includes:
-1. Project title and description
-2. Key features
-3. Installation instructions
-4. Usage examples
-5. Project structure overview
-6. Dependencies
-7. Contributing guidelines (if applicable)
+{formatting_instructions}
 
-Provide ONLY the README content in markdown format."""
+CRITICAL FORMATTING RULES - READ CAREFULLY:
+1. Use markdown ONLY for headings (# ## ###) and lists (-)
+2. DO NOT use code blocks (```) UNLESS showing actual executable code
+3. DO NOT use backticks (`) for regular text, file names, or descriptions
+4. Write everything as plain readable text in paragraphs
+5. Code blocks are ONLY for: commands to run, code examples, configuration files
+6. NO code blocks for: explanations, descriptions, architecture flow, file names
+
+BAD EXAMPLES - NEVER DO THIS:
+```
+This is how it works  (NO - explanations are plain text)
+```
+The `server.js` file  (NO - file names are plain text)
+- `Fast performance`  (NO - features are plain text)
+
+GOOD EXAMPLES - ALWAYS DO THIS:
+The server.js file handles all HTTP requests.  (YES - plain text)
+The system uses a microservices architecture.  (YES - plain explanation)
+Features include fast performance and easy deployment.  (YES - plain text)
+
+Install dependencies:
+```bash
+npm install
+```
+(YES - actual command)
+
+REQUIRED STRUCTURE WITH ARCHITECTURE:
+
+# Project Title
+One clear sentence describing what this project is and does.
+
+## Overview
+Write 2-3 sentences explaining the project purpose, main functionality, and target use case. Be concise and informative.
+
+## Architecture
+
+Describe the system architecture in clear paragraphs:
+
+Explain the overall architectural pattern used (MVC, microservices, client-server, etc.). Describe how the main components are organized and how they communicate with each other.
+
+Key components:
+- Component 1: Explain its purpose and responsibilities
+- Component 2: Explain its purpose and responsibilities  
+- Component 3: Explain its purpose and responsibilities
+
+Walk through the data flow or request flow. Explain what happens from input to output in a logical narrative sequence.
+
+## Features
+- Feature 1 with brief description of what it enables
+- Feature 2 with brief description of what it enables
+- Feature 3 with brief description of what it enables
+
+## How It Works
+
+Explain the operational flow in narrative paragraphs:
+
+Describe the main workflow step by step. When X happens, the system does Y, which then triggers Z. Walk through typical use cases and explain the process in plain language.
+
+For example: A client makes a request, the server receives it, processes the data through various handlers, applies business logic, interacts with the database if needed, and returns a formatted response.
+
+## Installation
+
+Prerequisites: List required software, versions, and dependencies.
+
+Step-by-step installation:
+1. Clone the repository
+2. Navigate to directory
+3. Install dependencies
+4. Set up configuration
+
+Commands:
+```bash
+git clone repository-url
+cd project-directory
+npm install
+```
+
+## Usage
+
+Explain how to run and use the project in plain text.
+
+Starting the application:
+```bash
+npm start
+```
+
+Making requests or using features:
+```bash
+curl http://localhost:3000
+```
+
+## API Reference (if applicable)
+
+List endpoints with descriptions:
+
+- GET /users - Retrieves all user records from the database
+- POST /users - Creates a new user with provided data
+- PUT /users/id - Updates existing user information
+- DELETE /users/id - Removes user from the system
+
+Describe request/response format, expected parameters, and return values in paragraphs.
+
+## Project Structure
+
+Explain the organization in narrative form:
+
+The codebase is organized into logical sections. The main application code lives in the src directory. Configuration files are in the config folder. Tests are in the tests directory.
+
+Important files:
+- main.py: Application entry point that starts the server
+- routes.py: Defines all API endpoints and routing logic
+- models.py: Database models and schema definitions
+- utils.py: Shared helper functions
+
+## Technology Stack
+- Technology 1: Explanation of its role in the project
+- Technology 2: Explanation of its role in the project
+- Technology 3: Explanation of its role in the project
+
+Explain why these technologies were chosen and how they work together.
+
+
+
+## Development
+
+Explain the development setup and workflow in paragraphs.
+
+Running tests:
+```bash
+npm test
+```
+
+## Contributing
+Contribution guidelines in numbered steps without backticks.
+
+
+REMEMBER: 
+- Write in a natural, explanatory style
+- Use plain paragraphs for all descriptions and explanations
+- Code blocks only for actual code, commands, or config files
+- No backticks in regular text
+- Focus on helping readers understand both WHAT the code does and HOW it's structured
+
+"""
 
         # Call Gemini API
         try:
-            response = self.model.generate_content(
-                prompt,
-                generation_config=genai.types.GenerationConfig(
-                    temperature=0.7,
+            response = self.client.models.generate_content(
+                model='gemini-2.0-flash',
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    temperature=0.4,
                     max_output_tokens=4000,
                 )
             )
@@ -172,9 +321,10 @@ Provide ONLY the README content in markdown format."""
             return response_text
             
         except Exception as e:
-            print(f" Error calling Gemini API: {e}")
+            print(f"[!] Error calling Gemini API: {e}")
             return None
-    
+        
+            
     def _prepare_code_summary(self, repo_structure):
         """Prepare a concise summary of the codebase for Claude"""
         summary = []
@@ -215,7 +365,7 @@ Provide ONLY the README content in markdown format."""
                 content=new_content,
                 sha=readme.sha
             )
-            print(" README updated successfully!")
+            print("[OK] README updated successfully!")
             return True
         except Exception as e:
             # If README doesn't exist, create it
@@ -225,11 +375,11 @@ Provide ONLY the README content in markdown format."""
                     message="docs: Create README via Documentation Agent",
                     content=new_content
                 )
-                print("README created successfully!")
+                print("[OK] README created successfully!")
                 return True
             except Exception as create_error:
-                print(f"Error updating README: {e}")
-                print(f"Error creating README: {create_error}")
+                print(f"[!] Error updating README: {e}")
+                print(f"[!] Error creating README: {create_error}")
                 return False
     
     def load_cache(self):
@@ -246,7 +396,7 @@ Provide ONLY the README content in markdown format."""
     
     def run_once(self):
         """Run the documentation agent once"""
-        print(f"\n Checking repository at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        print(f"\n[*] Checking repository at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         
         # Get current state
         current_structure = self.get_repo_structure()
@@ -256,14 +406,14 @@ Provide ONLY the README content in markdown format."""
         cached_data = self.load_cache()
         
         # Analyze changes
-        if cached_data:
+        if cached_data and current_readme:
             changes = self.analyze_changes(cached_data, current_structure)
             
             if not any(changes.values()):
-                print(" No changes detected")
+                print("[OK] No changes detected")
                 return
             
-            print(f" Changes detected:")
+            print(f"[*] Changes detected:")
             print(f"   Added: {len(changes['added'])} files")
             print(f"   Modified: {len(changes['modified'])} files")
             print(f"   Deleted: {len(changes['deleted'])} files")
@@ -271,33 +421,33 @@ Provide ONLY the README content in markdown format."""
             # Generate updated documentation
             new_readme = self.generate_documentation(current_structure, current_readme, changes)
         else:
-            print("First run - generating initial documentation")
+            print("[*] First run - generating initial documentation")
             new_readme = self.generate_documentation(current_structure, current_readme)
         
         # Update README if needed
         if new_readme:
-            print("Documentation update required")
+            print("[*] Documentation update required")
             if self.update_readme(new_readme):
                 # Save new state
                 self.save_cache(current_structure)
         else:
-            print("No documentation updates needed")
+            print("[OK] No documentation updates needed")
             # Still save the cache to track changes
             self.save_cache(current_structure)
     
     def run_continuous(self, interval_minutes=60):
         """Run the agent continuously"""
-        print(f"Documentation Agent started")
-        print(f"Monitoring repository: {self.repo.full_name}")
-        print(f"Check interval: {interval_minutes} minutes")
+        print(f"[*] Documentation Agent started")
+        print(f"[*] Monitoring repository: {self.repo.full_name}")
+        print(f"[*] Check interval: {interval_minutes} minutes")
         
         while True:
             try:
                 self.run_once()
             except Exception as e:
-                print(f" Error: {e}")
+                print(f"[!] Error: {e}")
             
-            print(f"\nWaiting {interval_minutes} minutes until next check...")
+            print(f"\n[*] Waiting {interval_minutes} minutes until next check...")
             time.sleep(interval_minutes * 60)
 
 
@@ -310,7 +460,7 @@ def main():
     check_interval = int(os.getenv("CHECK_INTERVAL_MINUTES", "60"))
     
     if not all([repo_name, github_token, gemini_api_key]):
-        print(" Error: Missing required environment variables")
+        print("[!] Error: Missing required environment variables")
         print("Required: GITHUB_REPO, GITHUB_TOKEN, GEMINI_API_KEY")
         return
     

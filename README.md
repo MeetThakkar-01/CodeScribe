@@ -7,7 +7,7 @@ An AI-powered system that continuously monitors GitHub repositories and automati
 ## 🚀 Overview
 
 **Documentation Agent** is designed to act like a diligent developer who never forgets to update documentation.  
-It observes repository changes, understands code intent using AI, and updates documentation whenever necessary—without human intervention.
+It observes repository changes, understands code intent using AI, and updates documentation whenever necessary without human intervention.
 
 ---
 

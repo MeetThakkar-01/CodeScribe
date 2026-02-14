@@ -172,7 +172,7 @@ Provide ONLY the README content in markdown format."""
             return response_text
             
         except Exception as e:
-            print(f"❌ Error calling Gemini API: {e}")
+            print(f" Error calling Gemini API: {e}")
             return None
     
     def _prepare_code_summary(self, repo_structure):
@@ -215,7 +215,7 @@ Provide ONLY the README content in markdown format."""
                 content=new_content,
                 sha=readme.sha
             )
-            print("✅ README updated successfully!")
+            print(" README updated successfully!")
             return True
         except Exception as e:
             # If README doesn't exist, create it
@@ -225,11 +225,11 @@ Provide ONLY the README content in markdown format."""
                     message="docs: Create README via Documentation Agent",
                     content=new_content
                 )
-                print("✅ README created successfully!")
+                print("README created successfully!")
                 return True
             except Exception as create_error:
-                print(f"❌ Error updating README: {e}")
-                print(f"❌ Error creating README: {create_error}")
+                print(f"Error updating README: {e}")
+                print(f"Error creating README: {create_error}")
                 return False
     
     def load_cache(self):
@@ -246,7 +246,7 @@ Provide ONLY the README content in markdown format."""
     
     def run_once(self):
         """Run the documentation agent once"""
-        print(f"\n🔍 Checking repository at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        print(f"\n Checking repository at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         
         # Get current state
         current_structure = self.get_repo_structure()
@@ -260,10 +260,10 @@ Provide ONLY the README content in markdown format."""
             changes = self.analyze_changes(cached_data, current_structure)
             
             if not any(changes.values()):
-                print("✅ No changes detected")
+                print(" No changes detected")
                 return
             
-            print(f"📝 Changes detected:")
+            print(f" Changes detected:")
             print(f"   Added: {len(changes['added'])} files")
             print(f"   Modified: {len(changes['modified'])} files")
             print(f"   Deleted: {len(changes['deleted'])} files")
@@ -271,33 +271,33 @@ Provide ONLY the README content in markdown format."""
             # Generate updated documentation
             new_readme = self.generate_documentation(current_structure, current_readme, changes)
         else:
-            print("🆕 First run - generating initial documentation")
+            print("First run - generating initial documentation")
             new_readme = self.generate_documentation(current_structure, current_readme)
         
         # Update README if needed
         if new_readme:
-            print("📄 Documentation update required")
+            print("Documentation update required")
             if self.update_readme(new_readme):
                 # Save new state
                 self.save_cache(current_structure)
         else:
-            print("✅ No documentation updates needed")
+            print("No documentation updates needed")
             # Still save the cache to track changes
             self.save_cache(current_structure)
     
     def run_continuous(self, interval_minutes=60):
         """Run the agent continuously"""
-        print(f"🤖 Documentation Agent started")
-        print(f"📊 Monitoring repository: {self.repo.full_name}")
-        print(f"⏰ Check interval: {interval_minutes} minutes")
+        print(f"Documentation Agent started")
+        print(f"Monitoring repository: {self.repo.full_name}")
+        print(f"Check interval: {interval_minutes} minutes")
         
         while True:
             try:
                 self.run_once()
             except Exception as e:
-                print(f"❌ Error: {e}")
+                print(f" Error: {e}")
             
-            print(f"\n⏳ Waiting {interval_minutes} minutes until next check...")
+            print(f"\nWaiting {interval_minutes} minutes until next check...")
             time.sleep(interval_minutes * 60)
 
 
@@ -310,7 +310,7 @@ def main():
     check_interval = int(os.getenv("CHECK_INTERVAL_MINUTES", "60"))
     
     if not all([repo_name, github_token, gemini_api_key]):
-        print("❌ Error: Missing required environment variables")
+        print(" Error: Missing required environment variables")
         print("Required: GITHUB_REPO, GITHUB_TOKEN, GEMINI_API_KEY")
         return
     

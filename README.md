@@ -1,16 +1,20 @@
-# GitHub PR Code Review Agent 🤖
+# CodeScribe — Multi-Agent Code Collaboration 🤖
 
-An intelligent AI-powered code review agent that automatically reviews Pull Requests using Google Gemini AI and posts detailed inline comments directly on GitHub.
+CodeScribe is a LangGraph-orchestrated multi-agent system that helps teams ship code. A supervisor graph routes GitHub webhook events to specialized subgraphs:
+
+- **PR Review Agent** — analyzes diffs with Gemini and posts inline review comments when a PR is opened, reopened, or updated.
+- **Documentation Agent** — when a PR is merged into `main`, walks the repo and updates `README.md` to keep it in sync with the code.
 
 ## Features ✨
 
-- 🔍 **Automated Code Analysis** - Reviews code changes using Google Gemini AI
+- 🧠 **Supervisor + Subgraphs** - Parent LangGraph routes events to the right specialist agent
+- 🔍 **Automated Code Analysis** - Reviews code changes using Google Gemini
 - 💬 **Inline Comments** - Posts detailed review comments on specific lines
+- 📝 **Living Documentation** - Doc agent commits README updates after merges
 - 🏷️ **Smart Labeling** - Automatically adds labels based on review status
-- 🔐 **Secure Authentication** - Uses GitHub App authentication
+- 🔐 **Single Auth Path** - GitHub App installation tokens used by both agents
 - 📊 **Severity Classification** - Categorizes issues by severity (High/Medium/Low)
-- 🎯 **Multiple Categories** - Identifies bugs, security issues, performance problems, style issues, and best practices
-- 🚀 **Human-Controlled Approval** - Agent reviews but humans approve and merge
+- 🚀 **Human-Controlled Approval** - Agents assist; humans approve and merge
 
 ## Prerequisites
 
@@ -64,11 +68,11 @@ pip install -r requirements.txt
 
 4. **Set Repository Permissions:**
    - **Pull requests:** Read & write ✅
-   - **Contents:** Read only ✅
+   - **Contents:** Read & write ✅ (write is required so the docs agent can commit README updates)
    - **Metadata:** Read only ✅ (automatic)
 
 5. **Subscribe to Events:**
-   - Check ✅ **Pull request**
+   - Check ✅ **Pull request** (covers both `opened` and `closed`/merged actions)
 
 6. **Installation Settings:**
    - Select **"Only on this account"**
@@ -233,22 +237,19 @@ You can change the AI model in `.env`:
 
 ```mermaid
 graph LR
-    A[PR Opened/Updated] --> B[GitHub Webhook]
-    B --> C[FastAPI Server]
-    C --> D[LangGraph Workflow]
-    D --> E[Fetch PR Changes]
-    E --> F[Gemini AI Analysis]
-    F --> G[Post Review Comments]
-    G --> H[Add Labels]
-    H --> I[Ready for Human Review]
+    A[GitHub Webhook] --> B[FastAPI Server]
+    B --> C[Supervisor Graph]
+    C -->|PR opened/updated| D[Review Subgraph]
+    C -->|PR merged to main| E[Docs Subgraph]
+    D --> F[Inline Comments + Labels]
+    E --> G[README Commit]
 ```
 
-1. **Webhook Trigger** - GitHub sends webhook when PR is opened/updated
-2. **Fetch Changes** - Agent retrieves the code diff
-3. **AI Analysis** - Gemini analyzes code for issues
-4. **Post Comments** - Inline comments posted on specific lines
-5. **Add Labels** - Status labels added automatically
-6. **Human Review** - Team reviews and approves/merges
+1. **Webhook arrives** at the FastAPI server. The body is HMAC-verified, then the supervisor graph is invoked in a background task.
+2. **Supervisor routes** based on event type: `pr_opened` → review subgraph, `pr_merged` → docs subgraph.
+3. **Review subgraph** (`fetch_pr_changes → analyze_code → post_reviews → update_status`) fetches the diff, asks Gemini for issues, posts inline comments, and labels the PR.
+4. **Docs subgraph** (`load_cache → fetch_repo_structure → detect_changes → generate_docs → commit_readme → save_cache`) compares the current repo against a cached snapshot and asks Gemini to refresh the README only if needed.
+5. **Per-agent substates** keep each subgraph encapsulated; the supervisor only coordinates, so adding a third agent (e.g., ticketing) is a single new node + edge.
 
 ---
 
@@ -382,7 +383,27 @@ For detailed architecture documentation, see [docs/architecture.md](docs/archite
 ---
 
 **Built with:**
-- 🤖 [LangGraph](https://github.com/langchain-ai/langgraph) - Workflow orchestration
-- 🧠 [Google Gemini](https://ai.google.dev/) - AI code analysis
+- 🤖 [LangGraph](https://github.com/langchain-ai/langgraph) - Multi-agent supervisor + subgraph orchestration
+- 🧠 [Google Gemini](https://ai.google.dev/) - Code analysis (review agent) and documentation generation (docs agent)
 - 🐙 [PyGithub](https://github.com/PyGithub/PyGithub) - GitHub API integration
 - ⚡ [FastAPI](https://fastapi.tiangolo.com/) - Webhook server
+
+## Project Layout
+
+```
+src/
+  workflow/
+    supervisor_graph.py   # parent graph: routes events to a subgraph
+    supervisor_state.py   # SupervisorState (shared context + per-agent substate slots)
+    review_graph.py       # PR review subgraph (unchanged)
+    state.py              # ReviewState
+  agents/
+    code_reviewer.py      # Gemini-backed reviewer used by the review subgraph
+    documentation/
+      graph.py            # Documentation subgraph (load → fetch → detect → generate → commit → save)
+      state.py            # DocState
+      legacy_agent.py     # Underlying GitHub + google-genai logic the subgraph delegates to
+  github/
+    webhook_handler.py    # FastAPI app that dispatches to the supervisor
+    client.py             # GitHub App auth (used by both agents via `get_installation_token`)
+```

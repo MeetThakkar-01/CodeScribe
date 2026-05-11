@@ -1,5 +1,9 @@
 """Basic tests for the GitHub PR Review Agent."""
 
+import hashlib
+import hmac
+import json
+
 import pytest
 from unittest.mock import Mock, patch, MagicMock
 from src.workflow.state import ReviewState, PRMetadata, CodeChange, ReviewComment
@@ -78,6 +82,7 @@ class TestWorkflow:
                 installation_id=12345,
             ),
             "changes": [],
+            "retrieved_context": [],
             "review_comments": [],
             "analysis_complete": False,
             "comments_posted": False,
@@ -118,6 +123,104 @@ async def test_webhook_root_endpoint():
     assert response.status_code == 200
     assert "status" in response.json()
     assert response.json()["status"] == "ok"
+
+
+def _signed_post(client, payload: dict, event: str, secret: str):
+    body = json.dumps(payload).encode()
+    sig = "sha256=" + hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
+    return client.post(
+        "/webhook/github",
+        content=body,
+        headers={
+            "X-Hub-Signature-256": sig,
+            "X-GitHub-Event": event,
+            "Content-Type": "application/json",
+        },
+    )
+
+
+def _pr_payload(action: str, *, merged: bool = False, base_ref: str = "main") -> dict:
+    return {
+        "action": action,
+        "pull_request": {
+            "number": 42,
+            "title": "demo",
+            "user": {"login": "octocat"},
+            "base": {"ref": base_ref},
+            "head": {"ref": "feature/x"},
+            "merged": merged,
+        },
+        "repository": {
+            "name": "demo",
+            "owner": {"login": "octo"},
+        },
+        "installation": {"id": 999},
+    }
+
+
+@pytest.mark.asyncio
+async def test_webhook_dispatches_review_on_pr_opened():
+    """A PR opened webhook should dispatch to the review agent."""
+    from fastapi.testclient import TestClient
+
+    with patch("src.github.webhook_handler.CodeScribeOrchestrator") as mock_sup:
+        mock_sup.return_value.graph = MagicMock()
+        from src.github.webhook_handler import app
+
+        with TestClient(app) as client:
+            response = _signed_post(
+                client, _pr_payload("opened"), "pull_request", "test-secret"
+            )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "accepted"
+    assert body["agent"] == "review"
+    assert "run_id" in body
+
+
+@pytest.mark.asyncio
+async def test_webhook_dispatches_docs_on_merged_pr():
+    """A PR closed+merged into main should dispatch to the docs agent."""
+    from fastapi.testclient import TestClient
+
+    with patch("src.github.webhook_handler.CodeScribeOrchestrator") as mock_sup:
+        mock_sup.return_value.graph = MagicMock()
+        from src.github.webhook_handler import app
+
+        with TestClient(app) as client:
+            response = _signed_post(
+                client,
+                _pr_payload("closed", merged=True, base_ref="main"),
+                "pull_request",
+                "test-secret",
+            )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "accepted"
+    assert body["agent"] == "docs"
+
+
+@pytest.mark.asyncio
+async def test_webhook_ignores_closed_unmerged_pr():
+    """A PR closed without merge should not dispatch anything."""
+    from fastapi.testclient import TestClient
+
+    with patch("src.github.webhook_handler.CodeScribeOrchestrator") as mock_sup:
+        mock_sup.return_value.graph = MagicMock()
+        from src.github.webhook_handler import app
+
+        with TestClient(app) as client:
+            response = _signed_post(
+                client,
+                _pr_payload("closed", merged=False),
+                "pull_request",
+                "test-secret",
+            )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "ignored"
 
 
 if __name__ == "__main__":

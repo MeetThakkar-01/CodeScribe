@@ -1,6 +1,6 @@
 """Code review agent using Google Gemini."""
 
-from typing import List
+from typing import List, Optional
 
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -8,7 +8,7 @@ from langchain_core.output_parsers import JsonOutputParser
 from pydantic import BaseModel, Field
 
 from src.config import get_settings
-from src.workflow.state import CodeChange, ReviewComment
+from src.workflow.state import CodeChange, RetrievedChunk, ReviewComment
 
 
 class ReviewCommentSchema(BaseModel):
@@ -46,11 +46,23 @@ class CodeReviewer:
         )
         self.parser = JsonOutputParser(pydantic_object=ReviewOutput)
 
-    def review_changes(self, changes: List[CodeChange]) -> ReviewOutput:
-        """Review code changes and generate comments."""
-        
+    def review_changes(
+        self,
+        changes: List[CodeChange],
+        retrieved_context: Optional[List[RetrievedChunk]] = None,
+    ) -> ReviewOutput:
+        """Review code changes and generate comments.
+
+        ``retrieved_context`` carries optional RAG-retrieved code chunks that
+        provide surrounding context (function definitions, related callers)
+        not present in the diff itself. When non-empty, the chunks are
+        injected into the prompt before the diff so the model can reason
+        about the change in context.
+        """
+
         # Build the code context
         code_context = self._build_code_context(changes)
+        retrieved_context_block = self._build_retrieved_context(retrieved_context or [])
 
         # Create the review prompt
         system_prompt = """You are an expert code reviewer. Analyze the provided code changes and identify:
@@ -86,7 +98,7 @@ Return your analysis in JSON format matching this schema:
 }
 """
 
-        user_prompt = f"""Review the following code changes:
+        user_prompt = f"""{retrieved_context_block}Review the following code changes:
 
 {code_context}
 
@@ -102,38 +114,58 @@ Provide your review in JSON format."""
         
         # Parse the response
         try:
-            # Extract JSON from response
+            import json
+
             content = response.content
-            
+
             # Handle if content is a list (Gemini sometimes returns list of content parts)
             if isinstance(content, list):
-                # Extract text from content parts
-                content = " ".join([part.text if hasattr(part, 'text') else str(part) for part in content])
-            
-            # Try to parse as JSON
-            import json
-            
-            # Find JSON in the response (handle markdown code blocks)
-            if "```json" in content:
-                json_start = content.find("```json") + 7
-                json_end = content.find("```", json_start)
-                json_str = content[json_start:json_end].strip()
-            elif "```" in content:
-                json_start = content.find("```") + 3
-                json_end = content.find("```", json_start)
-                json_str = content[json_start:json_end].strip()
-            else:
-                json_str = content.strip()
-            
+                content = " ".join(
+                    [part.text if hasattr(part, "text") else str(part) for part in content]
+                )
+
+            # Locate the outermost JSON object by braces. This is robust to:
+            #   - Markdown code fences (```json ... ```)
+            #   - Bare JSON responses with no fences
+            #   - Triple-backticks embedded inside suggestion strings (the model
+            #     often quotes code as ```python ... ``` inside a suggestion)
+            start = content.find("{")
+            end = content.rfind("}")
+            if start == -1 or end == -1 or end <= start:
+                raise ValueError(
+                    f"No JSON object found in LLM response: {content[:200]}"
+                )
+            json_str = content[start : end + 1]
+
             parsed = json.loads(json_str)
             return ReviewOutput(**parsed)
-            
+
         except Exception as e:
             # Fallback: return empty review with error in summary
             return ReviewOutput(
                 comments=[],
                 summary=f"Error parsing review: {str(e)}"
             )
+
+    def _build_retrieved_context(self, chunks: List[RetrievedChunk]) -> str:
+        """Format retrieved chunks as a labelled prompt prefix.
+
+        Returns the empty string when there are no chunks, so the prompt is
+        unchanged for repos with retrieval disabled.
+        """
+        if not chunks:
+            return ""
+        parts = ["## Retrieved repository context (for grounding)\n"]
+        for c in chunks:
+            parts.append(
+                f"\n### {c['file_path']}:{c['start_line']}-{c['end_line']} "
+                f"(score={c['score']:.3f})\n"
+            )
+            parts.append("```")
+            parts.append(c["content"])
+            parts.append("```\n")
+        parts.append("\n---\n\n")
+        return "".join(parts)
 
     def _build_code_context(self, changes: List[CodeChange]) -> str:
         """Build a formatted string of code changes for the LLM."""

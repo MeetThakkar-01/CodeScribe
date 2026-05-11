@@ -5,6 +5,16 @@ from typing import Annotated, List, Optional, TypedDict
 from langgraph.graph import add_messages
 
 
+class RetrievedChunk(TypedDict):
+    """A code chunk surfaced by the RAG retriever for the review prompt."""
+
+    file_path: str
+    start_line: int
+    end_line: int
+    content: str
+    score: float
+
+
 class CodeChange(TypedDict):
     """Represents a code change in a file."""
 
@@ -45,18 +55,21 @@ class ReviewState(TypedDict):
 
     # PR Information
     pr_metadata: PRMetadata
-    
+
     # Code changes
     changes: List[CodeChange]
-    
+
+    # RAG context retrieved for grounding the review prompt
+    retrieved_context: List[RetrievedChunk]
+
     # Review comments
     review_comments: List[ReviewComment]
-    
+
     # Status tracking
     analysis_complete: bool
     comments_posted: bool
     all_resolved: bool
     ready_for_approval: bool
-    
+
     # Error tracking
     error: Optional[str]

@@ -7,8 +7,12 @@ from langgraph.graph import StateGraph, END
 
 from src.workflow.state import ReviewState
 from src.github.client import GitHubClient
+from src.github.commit_manager import CommitManager
 from src.agents.code_reviewer import CodeReviewer
+from src.agents.review_summary import build_clean_summary, build_review_summary
 from src.config import get_settings
+from src.rag.retriever import CodeRetriever
+from src.workflow.timing import timed_stage
 
 logger = structlog.get_logger()
 
@@ -19,7 +23,9 @@ class PRReviewWorkflow:
     def __init__(self):
         """Initialize the workflow."""
         self.github_client = GitHubClient()
+        self.commit_manager = CommitManager(self.github_client)
         self.code_reviewer = CodeReviewer()
+        self.retriever = CodeRetriever()
         self.settings = get_settings()
         self.graph = self._build_graph()
 
@@ -29,19 +35,51 @@ class PRReviewWorkflow:
 
         # Add nodes
         workflow.add_node("fetch_pr_changes", self.fetch_pr_changes)
+        workflow.add_node("retrieve_context", self.retrieve_context)
         workflow.add_node("analyze_code", self.analyze_code)
         workflow.add_node("post_reviews", self.post_reviews)
         workflow.add_node("update_status", self.update_status)
 
         # Define the flow
         workflow.set_entry_point("fetch_pr_changes")
-        workflow.add_edge("fetch_pr_changes", "analyze_code")
+        workflow.add_edge("fetch_pr_changes", "retrieve_context")
+        workflow.add_edge("retrieve_context", "analyze_code")
         workflow.add_edge("analyze_code", "post_reviews")
         workflow.add_edge("post_reviews", "update_status")
         workflow.add_edge("update_status", END)
 
         return workflow.compile()
 
+    @timed_stage("retrieve_context")
+    def retrieve_context(self, state: ReviewState) -> Dict[str, Any]:
+        """Embed the diff and pull semantically related code from the index.
+
+        Failures here are non-fatal: the review proceeds without retrieved
+        context if Pinecone is misconfigured or unreachable.
+        """
+        if state.get("error"):
+            return {}
+
+        if not self.retriever.is_active:
+            logger.info("rag.retrieve skipped (retriever inactive)")
+            return {"retrieved_context": []}
+
+        # Build a query that captures both the files touched and a sample of
+        # what changed. Concatenating file paths plus the first ~500 chars of
+        # each diff keeps the embedded query bounded but specific.
+        parts = []
+        for change in state.get("changes") or []:
+            parts.append(change.get("file_path", ""))
+            diff = change.get("diff") or ""
+            if diff:
+                parts.append(diff[:500])
+        query = "\n".join(p for p in parts if p)
+
+        chunks = self.retriever.retrieve(query)
+        logger.info("rag.retrieve", retrieved=len(chunks))
+        return {"retrieved_context": chunks}
+
+    @timed_stage("fetch_pr_changes")
     def fetch_pr_changes(self, state: ReviewState) -> Dict[str, Any]:
         """Fetch PR changes from GitHub."""
         logger.info("Fetching PR changes", pr_number=state["pr_metadata"]["pr_number"])
@@ -68,6 +106,7 @@ class PRReviewWorkflow:
                 "error": f"Failed to fetch PR changes: {str(e)}",
             }
 
+    @timed_stage("analyze_code")
     def analyze_code(self, state: ReviewState) -> Dict[str, Any]:
         """Analyze code changes using AI."""
         logger.info("Analyzing code changes")
@@ -84,8 +123,11 @@ class PRReviewWorkflow:
                     "review_comments": [],
                 }
 
-            # Use AI to review the code
-            review_output = self.code_reviewer.review_changes(changes)
+            # Use AI to review the code, grounded in any retrieved context
+            review_output = self.code_reviewer.review_changes(
+                changes,
+                retrieved_context=state.get("retrieved_context") or [],
+            )
             review_comments = self.code_reviewer.convert_to_review_comments(
                 review_output
             )
@@ -108,6 +150,7 @@ class PRReviewWorkflow:
                 "analysis_complete": False,
             }
 
+    @timed_stage("post_reviews")
     def post_reviews(self, state: ReviewState) -> Dict[str, Any]:
         """Post review comments to GitHub."""
         logger.info("Posting review comments")
@@ -121,16 +164,10 @@ class PRReviewWorkflow:
 
             if not review_comments:
                 logger.info("No comments to post")
-                
-                # Post a summary comment
-                self.github_client.post_pr_comment(
-                    owner=pr_meta["repo_owner"],
-                    repo=pr_meta["repo_name"],
-                    pr_number=pr_meta["pr_number"],
-                    installation_id=pr_meta["installation_id"],
-                    comment_body="✅ **AI Code Review Complete**\n\nNo issues found! The code looks good. 🎉",
-                )
-                
+
+                # Post the "no issues found" summary via the CommitManager
+                self.commit_manager.post_summary(pr_meta, build_clean_summary())
+
                 return {"comments_posted": True}
 
             # Filter by severity if configured
@@ -182,14 +219,11 @@ class PRReviewWorkflow:
 *Generated by AI Code Review Agent*
 """
 
-                    self.github_client.post_review_comment(
-                        owner=pr_meta["repo_owner"],
-                        repo=pr_meta["repo_name"],
-                        pr_number=pr_meta["pr_number"],
-                        installation_id=pr_meta["installation_id"],
+                    self.commit_manager.post_inline_comment(
+                        pr_meta,
                         file_path=comment["file_path"],
                         line_number=comment["line_number"],
-                        comment_body=comment_body,
+                        body=comment_body,
                     )
                     posted_count += 1
 
@@ -201,23 +235,9 @@ class PRReviewWorkflow:
                         error=str(e),
                     )
 
-            # Post a summary comment
-            summary = f"""🤖 **AI Code Review Complete**
-
-Found **{len(filtered_comments)}** issue(s) to address:
-- 🚨 High: {sum(1 for c in filtered_comments if c['severity'] == 'high')}
-- ⚠️ Medium: {sum(1 for c in filtered_comments if c['severity'] == 'medium')}
-- ℹ️ Low: {sum(1 for c in filtered_comments if c['severity'] == 'low')}
-
-Please review the inline comments and address the issues. Once resolved, the PR will be ready for human approval.
-"""
-
-            self.github_client.post_pr_comment(
-                owner=pr_meta["repo_owner"],
-                repo=pr_meta["repo_name"],
-                pr_number=pr_meta["pr_number"],
-                installation_id=pr_meta["installation_id"],
-                comment_body=summary,
+            # Post a polished summary comment
+            self.commit_manager.post_summary(
+                pr_meta, build_review_summary(filtered_comments)
             )
 
             logger.info("Posted comments", count=posted_count)
@@ -231,6 +251,7 @@ Please review the inline comments and address the issues. Once resolved, the PR 
                 "comments_posted": False,
             }
 
+    @timed_stage("update_status")
     def update_status(self, state: ReviewState) -> Dict[str, Any]:
         """Update PR status with labels."""
         logger.info("Updating PR status")
@@ -241,14 +262,10 @@ Please review the inline comments and address the issues. Once resolved, the PR 
 
             pr_meta = state["pr_metadata"]
 
-            # Add "AI review complete" label
+            # Add "AI review complete" label via the CommitManager
             if self.settings.auto_label_on_complete:
-                self.github_client.add_label(
-                    owner=pr_meta["repo_owner"],
-                    repo=pr_meta["repo_name"],
-                    pr_number=pr_meta["pr_number"],
-                    installation_id=pr_meta["installation_id"],
-                    label=self.settings.ai_review_complete_label,
+                self.commit_manager.add_label(
+                    pr_meta, self.settings.ai_review_complete_label
                 )
 
                 # If no comments or all low severity, add "ready for approval"
@@ -258,12 +275,8 @@ Please review the inline comments and address the issues. Once resolved, the PR 
                 )
 
                 if not has_high_severity:
-                    self.github_client.add_label(
-                        owner=pr_meta["repo_owner"],
-                        repo=pr_meta["repo_name"],
-                        pr_number=pr_meta["pr_number"],
-                        installation_id=pr_meta["installation_id"],
-                        label=self.settings.ready_for_approval_label,
+                    self.commit_manager.add_label(
+                        pr_meta, self.settings.ready_for_approval_label
                     )
                     logger.info("Added ready-for-approval label")
 
@@ -280,6 +293,7 @@ Please review the inline comments and address the issues. Once resolved, the PR 
         initial_state: ReviewState = {
             "pr_metadata": pr_metadata,
             "changes": [],
+            "retrieved_context": [],
             "review_comments": [],
             "analysis_complete": False,
             "comments_posted": False,

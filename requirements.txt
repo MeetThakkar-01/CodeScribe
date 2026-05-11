@@ -3,6 +3,12 @@ langgraph>=0.2.0
 langchain>=0.3.0
 langchain-google-genai>=2.0.0
 
+# Direct Gemini SDK (used by the Documentation subgraph)
+google-genai>=0.3.0
+
+# Vector store for the RAG layer
+pinecone>=4.0.0
+
 # GitHub API
 PyGithub>=2.1.1
 PyJWT>=2.8.0  # For GitHub App authentication

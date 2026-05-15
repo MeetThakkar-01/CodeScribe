@@ -1,8 +1,8 @@
-"""Pre-recording check for the CodeScribe demo.
+"""Pre-check for the CodeScribe demo
 
-Run this before you start the recording on Saturday. It tells you, in one
-glance, which environment variables are set, which are missing, and which
-optional integrations are wired up.
+It tells you which environment variables are set, 
+which are missing, and which optional integrations
+are wired up.
 
 Usage:
     .venv/bin/python scripts/demo_doctor.py
@@ -137,7 +137,7 @@ def main() -> int:
     if env_ok and pkg_ok and key_ok:
         print(f"  {GREEN}Ready to demo.{RESET}")
         return 0
-    print(f"  {YELLOW}Some required items are missing — fix before recording.{RESET}")
+    print(f"  {YELLOW}Some required items are missing — fix before demo.{RESET}")
     return 1
 
 

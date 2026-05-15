@@ -1,25 +1,24 @@
 """Pre-stage a demo pull request for the CodeScribe recording.
 
-Creates a fresh branch on a target repository, adds an ``advanced_ops`` Python
+Creates a fresh branch on a target repository, adds a ``more_calc_ops`` Python
 module containing several intentional bugs and code smells, and opens a pull
-request whose title embeds a Jira ticket key. The Code Review Agent should
-flag the issues across multiple severity levels; the Jira Agent should
-recognize the ticket key and transition the linked issue.
+request. The Code Review Agent should flag the issues across multiple severity
+levels; the Ticketing Agent escalates high-severity findings to Jira.
 
 Bugs intentionally seeded into the new module, one per severity level:
-    HIGH    ``percentage()`` divides by ``total`` without guarding against zero
-    MEDIUM  ``is_in_range()`` docstring promises inclusive bounds, code is exclusive
-    LOW     ``square_root()`` leaves a debug print statement in production
+    HIGH    ``compute_average()`` crashes on an empty list (ZeroDivisionError)
+    MEDIUM  ``add_one_percent()`` adds literal 1 instead of 1% of x
+    LOW     ``half()`` uses integer division and truncates fractions
 
 Usage:
     .venv/bin/python scripts/demo_seed.py
 
 Required env vars (add to .env):
     GITHUB_PAT      Personal Access Token with `repo` scope
-    DEMO_REPO       Target repository in `owner/name` form (e.g. `acme/codescribe-demo`)
+    DEMO_REPO       Target repository in `owner/name`
 
 Optional env vars:
-    DEMO_PR_TITLE   PR title; defaults to "Add advanced operations"
+    DEMO_PR_TITLE   PR title; defaults to "Add more calculator operations"
 """
 
 from __future__ import annotations
@@ -33,27 +32,24 @@ from github import Auth, Github
 from github.GithubException import GithubException
 
 
-DEFAULT_PR_TITLE = "Add advanced operations"
+DEFAULT_PR_TITLE = "Add more calculator operations"
 
-BUGGY_CODE = '''"""Advanced calculator operations: percentage, range check, square root."""
-
-
-def percentage(value, total):
-    """Return what percentage `value` is of `total`."""
-    return (value / total) * 100
+BUGGY_CODE = '''"""More calculator operations: averaging, percent adjustment, halving."""
 
 
-def is_in_range(value, low, high):
-    """Return True if `value` is between `low` and `high`, inclusive."""
-    if value > low and value < high:
-        return True
-    return False
+def compute_average(numbers):
+    """Return the arithmetic mean of a list of numbers."""
+    return sum(numbers) / len(numbers)
 
 
-def square_root(number):
-    """Return the square root of a number."""
-    print(f"DEBUG: computing sqrt of {number}")
-    return number ** 0.5
+def add_one_percent(x):
+    """Add one percent to x."""
+    return x + 1
+
+
+def half(x):
+    """Return half of x."""
+    return x // 2
 '''
 
 
@@ -85,8 +81,8 @@ def main() -> int:
         return 1
 
     suffix = datetime.now().strftime("%Y%m%d-%H%M%S")
-    branch_name = f"feature/advanced-ops-{suffix}"
-    file_path = f"advanced_ops_{suffix}.py"
+    branch_name = f"feature/more-calc-ops-{suffix}"
+    file_path = f"more_calc_ops_{suffix}.py"
 
     print()
     print(f"Seeding demo PR on \033[1m{repo_name}\033[0m...")
@@ -122,8 +118,8 @@ def main() -> int:
 
     pr_body = (
         "Demo pull request for the CodeScribe multi-agent system.\n\n"
-        "Adds a new `advanced_ops` module extending the calculator with "
-        "percentage, range check, and square root operations. Three bugs are "
+        "Adds a new `more_calc_ops` module extending the calculator with "
+        "averaging, percent adjustment, and halving operations. Three bugs are "
         "intentionally seeded — one each at high, medium, and low severity — "
         "for the Code Review Agent to flag. High-severity findings will be "
         "filed as new Jira tickets by the Ticketing Agent."
@@ -132,7 +128,7 @@ def main() -> int:
     try:
         repo.create_file(
             path=file_path,
-            message="Add advanced operations module",
+            message="Add more calculator operations module",
             content=BUGGY_CODE,
             branch=branch_name,
         )

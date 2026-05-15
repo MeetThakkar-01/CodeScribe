@@ -5,16 +5,16 @@ CodeScribe is a LangGraph-orchestrated multi-agent system that helps teams ship 
 - **PR Review Agent** — analyzes diffs with Gemini and posts inline review comments when a PR is opened, reopened, or updated.
 - **Documentation Agent** — when a PR is merged into `main`, walks the repo and updates `README.md` to keep it in sync with the code.
 
-## Features ✨
+## Features 
 
-- 🧠 **Supervisor + Subgraphs** - Parent LangGraph routes events to the right specialist agent
-- 🔍 **Automated Code Analysis** - Reviews code changes using Google Gemini
-- 💬 **Inline Comments** - Posts detailed review comments on specific lines
-- 📝 **Living Documentation** - Doc agent commits README updates after merges
-- 🏷️ **Smart Labeling** - Automatically adds labels based on review status
-- 🔐 **Single Auth Path** - GitHub App installation tokens used by both agents
-- 📊 **Severity Classification** - Categorizes issues by severity (High/Medium/Low)
-- 🚀 **Human-Controlled Approval** - Agents assist; humans approve and merge
+-  **Supervisor + Subgraphs** - Parent LangGraph routes events to the right specialist agent
+-  **Automated Code Analysis** - Reviews code changes using Google Gemini
+-  **Inline Comments** - Posts detailed review comments on specific lines
+-  **Living Documentation** - Doc agent commits README updates after merges
+-  **Smart Labeling** - Automatically adds labels based on review status
+-  **Single Auth Path** - GitHub App installation tokens used by both agents
+-  **Severity Classification** - Categorizes issues by severity (High/Medium/Low)
+-  **Human-Controlled Approval** - Agents assist; humans approve and merge
 
 ## Prerequisites
 
@@ -67,12 +67,12 @@ pip install -r requirements.txt
    Copy the output and paste it in the **Webhook secret** field
 
 4. **Set Repository Permissions:**
-   - **Pull requests:** Read & write ✅
-   - **Contents:** Read & write ✅ (write is required so the docs agent can commit README updates)
-   - **Metadata:** Read only ✅ (automatic)
+   - **Pull requests:** Read & write 
+   - **Contents:** Read & write  (write is required so the docs agent can commit README updates)
+   - **Metadata:** Read only  (automatic)
 
 5. **Subscribe to Events:**
-   - Check ✅ **Pull request** (covers both `opened` and `closed`/merged actions)
+   - Check  **Pull request** (covers both `opened` and `closed`/merged actions)
 
 6. **Installation Settings:**
    - Select **"Only on this account"**
@@ -255,33 +255,46 @@ graph LR
 
 ## Deployment
 
-### Production Deployment Options
+Production deployments use AWS ECS Fargate, with secrets managed by AWS Secrets Manager and traces flowing to LangSmith.
 
-#### Option 1: Railway (Recommended)
+### AWS ECS Fargate Setup
 
-1. Create account at https://railway.app
-2. Connect your GitHub repository
-3. Add environment variables from `.env`
-4. Deploy - Railway provides a permanent URL
-5. Update GitHub webhook URL to Railway URL
+1. **Build and push the container** to Amazon ECR:
+   ```bash
+   docker build -t codescribe:latest .
+   aws ecr create-repository --repository-name codescribe
+   aws ecr get-login-password --region us-east-1 \
+     | docker login --username AWS --password-stdin <account>.dkr.ecr.us-east-1.amazonaws.com
+   docker tag codescribe:latest <account>.dkr.ecr.us-east-1.amazonaws.com/codescribe:latest
+   docker push <account>.dkr.ecr.us-east-1.amazonaws.com/codescribe:latest
+   ```
 
-#### Option 2: Render
+2. **Store credentials in AWS Secrets Manager** instead of an `.env` file:
+   ```bash
+   aws secretsmanager create-secret \
+     --name codescribe/credentials \
+     --secret-string '{
+       "GITHUB_APP_ID":"...",
+       "GITHUB_WEBHOOK_SECRET":"...",
+       "GOOGLE_API_KEY":"...",
+       "JIRA_API_TOKEN":"...",
+       "PINECONE_API_KEY":"...",
+       "LANGSMITH_API_KEY":"..."
+     }'
+   ```
+   The GitHub App private key (`.pem` file) is stored as a separate secret and mounted into the container at startup.
 
-1. Create account at https://render.com
-2. Create new Web Service
-3. Connect repository
-4. Add environment variables
-5. Deploy and update webhook URL
+3. **Run on ECS Fargate**: create a task definition that references the ECR image, maps the Secrets Manager values into environment variables via the task definition's `secrets` field, exposes container port 8000, and uses the `FARGATE` launch type. Front the task with an Application Load Balancer that terminates TLS and routes `/webhook/github` to port 8000.
 
-#### Option 3: Docker
+4. **Update the GitHub App webhook URL** to point at the load balancer:
+   ```
+   https://<your-alb-domain>/webhook/github
+   ```
 
-```bash
-# Build image
-docker build -t pr-review-agent .
-
-# Run container
-docker run -p 8000:8000 --env-file .env pr-review-agent
-```
+5. **Monitoring**:
+   - Application logs flow to CloudWatch Logs automatically (CodeScribe emits structured JSON to STDOUT).
+   - LangSmith captures every agent execution as a traced workflow — view runs at https://smith.langchain.com under the `codescribe-demo` project.
+   - A minimal task (0.25 vCPU, 0.5 GB RAM) is sufficient for typical workloads.
 
 ---
 
@@ -344,10 +357,10 @@ Check server logs for errors
 
 ## Security Notes
 
-- ⚠️ **Never commit `.env` file** - contains sensitive credentials
-- ⚠️ **Keep `.pem` file secure** - GitHub App private key
-- ⚠️ **Rotate secrets regularly** - webhook secret and API keys
-- ✅ **Use GitHub App** - more secure than Personal Access Tokens
+-  **Never commit `.env` file** - contains sensitive credentials
+-  **Keep `.pem` file secure** - GitHub App private key
+-  **Rotate secrets regularly** - webhook secret and API keys
+-  **Use GitHub App** - more secure than Personal Access Tokens
 
 ---
 
@@ -383,10 +396,10 @@ For detailed architecture documentation, see [docs/architecture.md](docs/archite
 ---
 
 **Built with:**
-- 🤖 [LangGraph](https://github.com/langchain-ai/langgraph) - Multi-agent supervisor + subgraph orchestration
-- 🧠 [Google Gemini](https://ai.google.dev/) - Code analysis (review agent) and documentation generation (docs agent)
-- 🐙 [PyGithub](https://github.com/PyGithub/PyGithub) - GitHub API integration
-- ⚡ [FastAPI](https://fastapi.tiangolo.com/) - Webhook server
+- [LangGraph](https://github.com/langchain-ai/langgraph) - Multi-agent supervisor + subgraph orchestration
+- [Google Gemini](https://ai.google.dev/) - Code analysis (review agent) and documentation generation (docs agent)
+- [PyGithub](https://github.com/PyGithub/PyGithub) - GitHub API integration
+- [FastAPI](https://fastapi.tiangolo.com/) - Webhook server
 
 ## Project Layout
 

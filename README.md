@@ -4,6 +4,7 @@ CodeScribe is a LangGraph-orchestrated multi-agent system that helps teams ship 
 
 - **PR Review Agent** — analyzes diffs with Gemini and posts inline review comments when a PR is opened, reopened, or updated.
 - **Documentation Agent** — when a PR is merged into `main`, walks the repo and updates `README.md` to keep it in sync with the code.
+- **Jira Ticketing Agent** — when the Review Agent flags a high-severity finding, files a Jira issue with severity, category, file location, and a link back to the PR.
 
 ## Features 
 
@@ -11,6 +12,7 @@ CodeScribe is a LangGraph-orchestrated multi-agent system that helps teams ship 
 -  **Automated Code Analysis** - Reviews code changes using Google Gemini
 -  **Inline Comments** - Posts detailed review comments on specific lines
 -  **Living Documentation** - Doc agent commits README updates after merges
+-  **Auto-Filed Tickets** - High-severity findings escalate to Jira issues automatically
 -  **Smart Labeling** - Automatically adds labels based on review status
 -  **Single Auth Path** - GitHub App installation tokens used by both agents
 -  **Severity Classification** - Categorizes issues by severity (High/Medium/Low)
@@ -29,12 +31,9 @@ Before setting up the agent, ensure you have:
 
 ## Setup Instructions
 
-### Step 1: Clone the Repository
+### Step 1: Open the Project Directory
 
-```bash
-git clone <your-repo-url>
-cd github-pr-review-agent
-```
+Extract, then open a terminal in the project root directory.
 
 ### Step 2: Create Virtual Environment
 
@@ -299,6 +298,8 @@ Production deployments use AWS ECS Fargate, with secrets managed by AWS Secrets 
 ---
 
 ## Troubleshooting
+
+These diagnostics apply to the local-iteration setup (FastAPI + ngrok). They are not needed for an AWS Fargate deployment, where the equivalent signals live in CloudWatch Logs (server output) and the Application Load Balancer's target group health (webhook reachability).
 
 ### Issue: Webhook not received
 
